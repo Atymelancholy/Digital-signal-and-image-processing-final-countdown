@@ -329,17 +329,26 @@ def inner_from_tile(cleaned: np.ndarray, tile: np.ndarray) -> np.ndarray:
     tile_u8 = tile[y0:y1, x0:x1].astype(np.uint8)
     roi = cleaned[y0:y1, x0:x1]
     hsv = cv2.cvtColor(roi, cv2.COLOR_RGB2HSV)
-    green = cv2.inRange(hsv, np.array([36, 50, 40]), np.array([95, 255, 255]))
+    # Тонкий контур (утка) слабее залитых цифр — порог как в extract_inner_figures.
+    green = cv2.inRange(hsv, np.array([36, 28, 22]), np.array([95, 255, 255]))
     gb = roi[..., 1].astype(np.int16) - roi[..., 2].astype(np.int16)
-    gb_mask = np.where((gb > 18) & (tile_u8 > 0), 255, 0).astype(np.uint8)
-    inner = np.where(((green > 0) | (gb_mask > 0)) & (tile_u8 > 0), 255, 0).astype(np.uint8)
-    inner = morphological_close(inner, 5)
+    gb_mask = np.where((gb > 8) & (tile_u8 > 0), 255, 0).astype(np.uint8)
+    painted = np.where(((green > 0) | (gb_mask > 0)) & (tile_u8 > 0), 255, 0).astype(np.uint8)
+    n_paint = int((painted > 0).sum())
+    inner = morphological_close(painted, 5)
     inner = np.where(tile_u8 > 0, inner, 0).astype(np.uint8)
-    if int(inner.sum()) < 80:
-        med = np.median(roi[tile_u8 > 0].reshape(-1, 3), axis=0) if tile_u8.any() else np.zeros(3)
+    tile_area = int((tile_u8 > 0).sum())
+    # Выдавленный нолик того же синего: зелёной краски почти нет, ищем тень бороздки.
+    if n_paint < max(80, 0.02 * tile_area):
+        core = cv2.erode(tile_u8, np.ones((9, 9), np.uint8))
+        sample = core if int(core.sum()) > 0 else tile_u8
+        med = np.median(roi[sample > 0].reshape(-1, 3), axis=0) if sample.any() else np.zeros(3)
         delta = np.abs(roi.astype(np.int16) - med.astype(np.int16)).sum(axis=-1)
-        inner = np.where((delta > 55) & (tile_u8 > 0), 255, 0).astype(np.uint8)
-        inner = morphological_close(inner, 5)
+        shade = np.where((delta > 28) & (core > 0), 255, 0).astype(np.uint8)
+        shade = morphological_close(shade, 5)
+        shade = np.where(tile_u8 > 0, shade, 0).astype(np.uint8)
+        if int((shade > 0).sum()) > n_paint:
+            inner = shade
     labels = label_connected(inner)
     if int(labels.max()) == 0:
         full[y0:y1, x0:x1] = inner
@@ -447,25 +456,24 @@ def extract_inner_figures(cleaned: np.ndarray, mask: np.ndarray) -> tuple[np.nda
 def analyze(rgb: np.ndarray, backend: str = "library") -> Lab2Result:
     lab1 = process(rgb, backend=backend)
     dist, sure, tiles = separate_tiles(lab1.mask)
-    inner_all, feats = extract_inner_figures(lab1.cleaned, lab1.mask)
-    covered = np.zeros(lab1.mask.shape, dtype=bool)
-    for f in feats:
-        covered |= f.mask
-    extra: list[ObjectFeat] = []
+    # По одной фигуре с каждой плитки: тонкий контур не сравниваем с толстой «8».
+    feats: list[ObjectFeat] = []
+    inner_all = np.zeros(lab1.mask.shape, dtype=np.uint8)
     for i in range(1, int(tiles.max()) + 1):
         tile = tiles == i
         if not tile.any():
             continue
-        if covered[tile].mean() > 0.004:
-            continue
         inner = inner_from_tile(lab1.cleaned, tile)
         feat = object_features(inner > 0, 0)
-        if feat is None or feat.extent < 0.20 or feat.aspect >= 3.5 or feat.compactness < 0.15:
+        if feat is None:
             continue
-        extra.append(feat)
+        tile_area = float(tile.sum())
+        if feat.area < max(80, 0.005 * tile_area):
+            continue
+        if feat.area > 0.62 * tile_area and feat.holes == 0:
+            continue
+        feats.append(feat)
         inner_all = np.maximum(inner_all, inner)
-        covered |= feat.mask
-    feats.extend(extra)
     for i, f in enumerate(feats, start=1):
         f.label = i
     classes = cluster_objects(feats, k=3)

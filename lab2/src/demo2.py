@@ -133,21 +133,21 @@ def show_lab2(result: Lab2Result, name: str = "") -> None:
         result.original,
         result.cleaned,
         result.mask,
-        result.eroded,
         dist_u8,
+        result.eroded,
         result.tiles_color,
         result.inner,
         result.colored,
     ]
     titles = [
         "Вход\nисходное фото",
-        "ЛР1, без фона\nкарточки выделены",
-        "Маска\nбинарные объекты",
-        "Эрозия\nслипшиеся фигуры расходятся",
-        "3D-карта\nвысота = расстояние до фона",
-        "Объекты\nкаждая плитка отдельно",
-        "Фигуры\nцифры и рисунки внутри",
-        "Итог, k-means\n1 красный · 2 синий · 3 зелёный",
+        "ЛР1: удаление фона\nостаются карточки",
+        "Бинарная маска\nобъект / фон",
+        "Карта расстояний\nрасстояние пикселя объекта до фона",
+        "Маркеры объектов\nвнутренние области по порогу карты",
+        "Watershed: разделённые плитки\nкаждая карточка — своя метка",
+        "Внутренние фигуры\nцифры и рисунки",
+        "K-means\nитоговая кластеризация",
     ]
     heading = "вход  →  разделение объектов  →  признаки  →  3 кластера"
     if name:
@@ -167,7 +167,7 @@ def show_lab2(result: Lab2Result, name: str = "") -> None:
     axes = [fig.add_subplot(gs[r, c]) for r in range(2) for c in range(4)]
     for ax, img, title in zip(axes, images, titles):
         if img.ndim == 2:
-            cmap = "inferno" if title.startswith("3D") else "gray"
+            cmap = "inferno" if title.startswith("Карта") else "gray"
             ax.imshow(img, cmap=cmap)
         else:
             ax.imshow(img)
