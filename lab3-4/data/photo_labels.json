@@ -1,0 +1,97 @@
+{
+  "purpose": "Manually checked regression examples only; never used by train_model. Similar scenes are not independent test samples.",
+  "label_order": "Lab3 figure.label, starting at 1; evaluation rejects missing/extra figures.",
+  "images": [
+    {
+      "file": "1695128011374.jpg",
+      "sha256": "680826a14d0f310f837947c7b90dab8ac344333b779b2176a6a5eb0d921fbeb6",
+      "digits": [
+        7,
+        8,
+        1,
+        7
+      ]
+    },
+    {
+      "file": "1695128011387.jpg",
+      "sha256": "9806ddc8d0e97492d31f7d7dca194ce79f73a920508b58c727f4e3e12525bd92",
+      "digits": [
+        7,
+        8,
+        1,
+        7
+      ]
+    },
+    {
+      "file": "1695138157752.jpg",
+      "sha256": "c40b6a4b21c9642fa751c109310e69e4348232c8b818d3cad4dc29962c8db7cd",
+      "digits": [
+        8,
+        7,
+        0,
+        3,
+        1
+      ]
+    },
+    {
+      "file": "1695138157765.jpg",
+      "sha256": "4e2cbeb6186fb61a8852dca99247ba79bd052a1949d9412e828c3e4a8afc1ce0",
+      "digits": [
+        8,
+        7,
+        0,
+        3,
+        1
+      ]
+    },
+    {
+      "file": "1695138157776.jpg",
+      "sha256": "f067be451a389f3deb839d65def9e0e0d29a50cc0cbd46a144a26aacc607b1fe",
+      "digits": [
+        8,
+        7,
+        3,
+        0,
+        1
+      ]
+    },
+    {
+      "file": "1695138157785.jpg",
+      "sha256": "2fb1a166b5e7bf49ee49b6688247418a757a2258a8b536fbd8af2e3902a3c5d0",
+      "digits": [
+        8,
+        7,
+        3,
+        0,
+        1
+      ]
+    },
+    {
+      "file": "1695138157794.jpg",
+      "sha256": "42cae12fc5fe03cc3eaa3c7f2fd62cf52d84699cd8bcb63bb4e5006c027a67dc",
+      "digits": [
+        8,
+        7,
+        3,
+        0,
+        1
+      ]
+    },
+    {
+      "file": "1695138157805.jpg",
+      "sha256": "a021f339e7d6a941cc698ef3ced9c48e17b68003fa67bd2863ca62c18130a91d",
+      "digits": [
+        7,
+        0,
+        1
+      ]
+    },
+    {
+      "file": "1725544579789.jpg",
+      "sha256": "0f78def1586eb026c26ca146fe725bef46bf5705df58e4d64071224d8d3b830a",
+      "digits": [
+        7
+      ]
+    }
+  ]
+}

@@ -14,7 +14,7 @@ import numpy as np
 
 from src.lab3 import bilinear_sample
 
-MNIST_DIR = Path("data/mnist")
+MNIST_DIR = Path(__file__).resolve().parents[1] / "data/mnist"
 MNIST_FILES = (
     "train-images-idx3-ubyte.gz",
     "train-labels-idx1-ubyte.gz",
@@ -33,8 +33,8 @@ def resize_gray(image: np.ndarray, nh: int, nw: int) -> np.ndarray:
     h, w = img.shape[:2]
     if h == nh and w == nw:
         return img
-    ys = (np.arange(nh) + 0.5) * h / nh - 0.5
-    xs = (np.arange(nw) + 0.5) * w / nw - 0.5
+    ys = np.clip((np.arange(nh) + 0.5) * h / nh - 0.5, 0, h - 1)
+    xs = np.clip((np.arange(nw) + 0.5) * w / nw - 0.5, 0, w - 1)
     yy, xx = np.meshgrid(ys, xs, indexing="ij")
     return bilinear_sample(img, xx, yy, fill=0.0)
 
@@ -192,14 +192,14 @@ def _digit_strokes(digit: int, rng: np.random.Generator) -> list[np.ndarray]:
             np.array([[7.0, 8.0], [6.2, 18.5], [10.5, 20.5], [16.5, 8.0], [22.0, 7.5], [22.0, 20.5]]),
         ]
     if digit == 3:
-        return [
-            np.array([[6.5, 8.0], [6.5, 19.0], [13.5, 19.5], [14.0, 14.0], [13.5, 8.5]]),
-            np.array([[14.0, 14.0], [13.8, 20.0], [21.5, 19.5], [22.0, 8.0]]),
-        ]
+        # Две открытые слева дуги, а не два прямоугольника.
+        a = np.linspace(-2.15, 2.15, 32)
+        return [np.stack([cy + 4.5 * np.sin(a), 12.5 + 5.5 * np.cos(a)], axis=1)
+                for cy in (9.5, 18.5)]
     if digit == 4:
         return [
             np.array([[6.5, 16.5], [16.5, 7.5], [16.5, 21.0]]),
-            np.array([[16.5, 14.5], [7.0, 14.5]]),
+            np.array([[6.5, 17.5], [22.0, 17.5]]),
         ]
     if digit == 5:
         return [
@@ -226,12 +226,18 @@ def _digit_strokes(digit: int, rng: np.random.Generator) -> list[np.ndarray]:
 
 def make_synthetic_digit(digit: int, rng: np.random.Generator) -> np.ndarray:
     canvas = np.zeros((28, 28), dtype=np.float64)
-    radius = float(rng.uniform(1.7, 2.6))
+    radius = float(rng.uniform(0.8, 1.8))
     for stroke in _digit_strokes(int(digit), rng):
-        _paint_polyline(canvas, _jitter(stroke, rng), radius)
-    if rng.random() < 0.7:
-        canvas = shift_gray(canvas, rng.uniform(-1.6, 1.6), rng.uniform(-1.6, 1.6))
-    return np.clip(canvas, 0.0, 1.0).astype(np.float32)
+        _paint_polyline(canvas, _jitter(stroke, rng, 0.15), radius)
+    # Нормализация совпадает с подготовкой реальных карточек.
+    canvas = fit_to_mnist(canvas)
+    yy, xx = np.indices((28, 28), dtype=np.float64)
+    angle = rng.uniform(-0.20, 0.20)
+    scale_x, scale_y = rng.uniform(0.88, 1.12, 2)
+    dx, dy = (xx - 13.5) / scale_x, (yy - 13.5) / scale_y
+    xs = dx * np.cos(angle) + dy * np.sin(angle) + 13.5
+    ys = -dx * np.sin(angle) + dy * np.cos(angle) + 13.5
+    return np.clip(bilinear_sample(canvas, xs, ys), 0, 1).astype(np.float32)
 
 
 def make_synthetic_set(n_per_class: int, seed: int = 1) -> tuple[np.ndarray, np.ndarray]:
@@ -246,13 +252,23 @@ def make_synthetic_set(n_per_class: int, seed: int = 1) -> tuple[np.ndarray, np.
 
 
 def augment_images(images: np.ndarray, rng: np.random.Generator) -> np.ndarray:
-    out = images.astype(np.float64).copy()
-    for i in range(len(out)):
-        if rng.random() < 0.65:
-            out[i] = shift_gray(out[i], rng.uniform(-2.0, 2.0), rng.uniform(-2.0, 2.0))
-        if rng.random() < 0.15:
-            out[i] *= float(rng.uniform(0.75, 1.0))
-    return np.clip(out, 0.0, 1.0).astype(np.float32)
+    """Пакетный сдвиг с билинейной интерполяцией и нулевым фоном."""
+    n, h, w = images.shape
+    shifts = rng.uniform(-2, 2, (n, 2))
+    shifts[rng.random(n) > 0.65] = 0
+    yy, xx = np.indices((h, w), dtype=np.float32)
+    x = xx[None] - shifts[:, 1, None, None]
+    y = yy[None] - shifts[:, 0, None, None]
+    x0, y0 = np.floor(x).astype(int), np.floor(y).astype(int)
+    wx, wy = x - x0, y - y0
+    out = np.zeros_like(images, dtype=np.float32)
+    for ox, oy, weight in [(0, 0, (1-wx)*(1-wy)), (1, 0, wx*(1-wy)),
+                           (0, 1, (1-wx)*wy), (1, 1, wx*wy)]:
+        xi, yi = x0 + ox, y0 + oy
+        valid = (xi >= 0) & (xi < w) & (yi >= 0) & (yi < h)
+        out += (images[np.arange(n)[:, None, None], np.clip(yi, 0, h-1),
+                       np.clip(xi, 0, w-1)] * weight * valid).astype(np.float32)
+    return out
 
 
 def flatten(images: np.ndarray) -> np.ndarray:

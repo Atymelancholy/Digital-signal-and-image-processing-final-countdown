@@ -1,16 +1,18 @@
 """
 Лабораторная №3: поворот фигур в читаемый вид.
 Своя реализация: ось инерции (моменты), поворот билинейной интерполяцией,
-выбор 180° по профилю ширины. Без cv2.warpAffine / getRotationMatrix2D.
+выбор 180° по профилю ширины и направлению открытых дуг.
+Без cv2.warpAffine / getRotationMatrix2D.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 
 import numpy as np
 
-from src.lab2 import CLASS_RGB, Lab2Result, ObjectFeat, analyze
+from src.lab2 import Lab2Result, analyze, count_holes
 
 
 @dataclass
@@ -30,8 +32,6 @@ class UprightFigure:
 class Lab3Result:
     lab2: Lab2Result
     figures: list[UprightFigure]
-    method1: np.ndarray
-    method1_color: np.ndarray
 
 
 def principal_axis_angle(mask: np.ndarray) -> tuple[float, float, float]:
@@ -59,7 +59,6 @@ def bilinear_sample(image: np.ndarray, x: np.ndarray, y: np.ndarray, fill: float
     y1 = y0 + 1
     wx = x - x0.astype(np.float64)
     wy = y - y0.astype(np.float64)
-    ok = (x0 >= 0) & (x1 < w) & (y0 >= 0) & (y1 < h)
 
     def grab(ix: np.ndarray, iy: np.ndarray) -> np.ndarray:
         if image.ndim == 2:
@@ -83,7 +82,6 @@ def bilinear_sample(image: np.ndarray, x: np.ndarray, y: np.ndarray, fill: float
             + grab(x0, y1) * w01
             + grab(x1, y1) * w11
         )
-        acc[~ok] = fill
         return acc
     acc = (
         grab(x0, y0) * w00[..., None]
@@ -91,7 +89,6 @@ def bilinear_sample(image: np.ndarray, x: np.ndarray, y: np.ndarray, fill: float
         + grab(x0, y1) * w01[..., None]
         + grab(x1, y1) * w11[..., None]
     )
-    acc[~ok] = fill
     return acc
 
 
@@ -106,7 +103,7 @@ def rotate_around(
     fill: float = 0.0,
 ) -> np.ndarray:
     """
-    Поворот вокруг (cx, cy) на angle_deg (против часовой на экране с y вниз).
+    Поворот вокруг (cx, cy) на angle_deg (по часовой на экране с y вниз).
     Обратное отображение + билинейная интерполяция.
     """
     h, w = image.shape[:2]
@@ -124,10 +121,11 @@ def rotate_around(
     xs = dx * cos_a + dy * sin_a + cx
     ys = -dx * sin_a + dy * cos_a + cy
     sampled = bilinear_sample(image, xs, ys, fill=fill)
-    if image.dtype == np.bool_ or image.max() <= 1:
+    if image.dtype == np.bool_:
         return sampled > 0.5
     if np.issubdtype(image.dtype, np.integer):
-        return np.clip(np.rint(sampled), 0, 255).astype(np.uint8)
+        limits = np.iinfo(image.dtype)
+        return np.clip(np.rint(sampled), limits.min, limits.max).astype(image.dtype)
     return sampled.astype(image.dtype)
 
 
@@ -171,7 +169,7 @@ def wrap_signed(angle_deg: float) -> float:
 
 def _rotate_mask(mask: np.ndarray, angle: float, cx: float, cy: float, diag: int) -> np.ndarray:
     ncx = ncy = (diag - 1) / 2.0
-    rot = rotate_around(mask.astype(np.uint8), angle, cx, cy, (diag, diag), ncx, ncy)
+    rot = rotate_around(mask.astype(bool), angle, cx, cy, (diag, diag), ncx, ncy)
     return rot > 0
 
 
@@ -224,6 +222,59 @@ def bar_align_delta(rot_mask: np.ndarray) -> float:
     return float(np.clip(-deg, -16.0, 16.0))
 
 
+def _normalized_shape(mask: np.ndarray) -> np.ndarray:
+    box = bbox(mask)
+    if box is None:
+        return np.zeros((48, 32), dtype=bool)
+    y0, y1, x0, x1 = box
+    crop = mask[y0:y1, x0:x1].astype(float)
+    yy, xx = np.meshgrid(np.linspace(0, crop.shape[0] - 1, 48),
+                         np.linspace(0, crop.shape[1] - 1, 32), indexing="ij")
+    return bilinear_sample(crop, xx, yy) > 0.5
+
+
+@lru_cache(maxsize=1)
+def _open_double_arc_templates() -> tuple[np.ndarray, ...]:
+    """Геометрические эталоны двух дуг, открытых слева (форма тройки)."""
+    yy, xx = np.indices((28, 28))
+    angles = np.linspace(-2.15, 2.15, 96)
+    distance = np.full((28, 28), np.inf)
+    for cy in (9.5, 18.5):
+        for a in angles:
+            distance = np.minimum(distance, np.hypot(
+                yy - (cy + 4.5 * np.sin(a)), xx - (12.5 + 5.5 * np.cos(a))))
+    return tuple(_normalized_shape(distance < r) for r in (1.15, 1.55, 1.95, 2.35))
+
+
+def open_arc_needs_flip(mask: np.ndarray) -> bool:
+    """Профиль ширины не различает верх/низ тройки: проверяем сторону дуг.
+
+    Закрытые петли исключены. Поворот разрешён только при хорошем совпадении
+    и явном преимуществе противоположной ориентации; это не метка для ЛР4.
+    """
+    box = bbox(mask)
+    if box is None:
+        return False
+    y0, y1, x0, x1 = box
+    local = mask[y0:y1, x0:x1]
+    if count_holes(np.pad(local, 1)):
+        return False
+    shape = _normalized_shape(local)
+    def score(candidate: np.ndarray) -> float:
+        # Ось инерции асимметричной фигуры может оставлять небольшой наклон.
+        # Сопоставление допускает его, не меняя геометрию итоговой карточки.
+        padded = np.pad(candidate, 10)
+        variants = [_normalized_shape(rotate_around(padded, delta, 25.5, 33.5))
+                    for delta in (-10, -5, 0, 5, 10)]
+        return max(2.0 * np.count_nonzero(v & ref) /
+                   max(int(v.sum() + ref.sum()), 1)
+                   for ref in _open_double_arc_templates() for v in variants)
+    normal, flipped = score(shape), score(shape[::-1, ::-1])
+    # Допуск к растровой границе и перспективе: совпадение не менее 2/3,
+    # но обязательно с преимуществом перед исходной ориентацией.
+    return flipped > 2.0 / 3.0 and flipped - normal > 0.06
+
+
 def upright_angle(mask: np.ndarray) -> float:
     """
     Угол, после которого фигура стоит вертикально и «головой» вверх:
@@ -258,6 +309,9 @@ def upright_angle(mask: np.ndarray) -> float:
             rot_m = _rotate_mask(mask, angle, cx, cy, diag)
 
     angle += bar_align_delta(rot_m)
+    rot_m = _rotate_mask(mask, angle, cx, cy, diag)
+    if open_arc_needs_flip(rot_m):
+        angle += 180.0
     return wrap_signed(angle)
 
 
@@ -318,34 +372,8 @@ def process_figures(lab2: Lab2Result) -> list[UprightFigure]:
     return out
 
 
-def compose_method1(lab2: Lab2Result, figures: list[UprightFigure], colored: bool) -> np.ndarray:
-    """Способ 1: каждая цифра поворачивается на месте вокруг своего центра."""
-    h, w = lab2.cleaned.shape[:2]
-    canvas = np.zeros((h, w, 3), dtype=np.uint8)
-    for feat, fig in zip(lab2.objects, figures):
-        src = np.zeros((h, w, 3), dtype=np.uint8)
-        if colored:
-            src[feat.mask] = CLASS_RGB[fig.cls]
-        else:
-            src[feat.mask] = lab2.cleaned[feat.mask]
-        rot = rotate_around(src, fig.angle_deg, fig.cx, fig.cy, (h, w), fig.cx, fig.cy)
-        mrot = rotate_around(
-            feat.mask.astype(np.uint8) * 255,
-            fig.angle_deg,
-            fig.cx,
-            fig.cy,
-            (h, w),
-            fig.cx,
-            fig.cy,
-        )
-        on = mrot > 127
-        canvas[on] = rot[on]
-    return canvas
-
-
 def run_lab3(rgb: np.ndarray) -> Lab3Result:
+    """Способ 2 из ТЗ: вырезать каждую цифру и повернуть отдельно."""
     lab2 = analyze(rgb, backend="library")
     figures = process_figures(lab2)
-    method1 = compose_method1(lab2, figures, colored=False)
-    method1_color = compose_method1(lab2, figures, colored=True)
-    return Lab3Result(lab2=lab2, figures=figures, method1=method1, method1_color=method1_color)
+    return Lab3Result(lab2=lab2, figures=figures)

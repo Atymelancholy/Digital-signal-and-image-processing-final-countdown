@@ -233,15 +233,21 @@ def object_features(mask: np.ndarray, label: int) -> ObjectFeat | None:
 def kmeans(X: np.ndarray, k: int, seed: int = 0, iters: int = 50) -> np.ndarray:
     """k-means: случайные центры (k-means++), евклидова метрика, пересчёт средних."""
     n = len(X)
+    if n == 0:
+        return np.zeros(0, dtype=np.int32)
     k = max(1, min(k, n))
     rng = np.random.default_rng(seed)
     centers = [X[int(rng.integers(0, n))]]
     for _ in range(1, k):
         d2 = np.min(((X[:, None, :] - np.stack(centers)[None, :, :]) ** 2).sum(-1), axis=1)
-        p = d2 / max(float(d2.sum()), 1e-12)
+        total = float(d2.sum())
+        if total <= 1e-12:
+            break  # Все различные точки уже представлены центрами.
+        p = d2 / total
         centers.append(X[int(rng.choice(n, p=p))])
     centers = np.stack(centers).astype(np.float64)
-    labels = np.zeros(n, dtype=np.int32)
+    k = len(centers)
+    labels = np.full(n, -1, dtype=np.int32)
     for _ in range(iters):
         dist = ((X[:, None, :] - centers[None, :, :]) ** 2).sum(-1)
         new = dist.argmin(axis=1).astype(np.int32)
